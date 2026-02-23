@@ -9,21 +9,31 @@ from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 import time
+import os
+
+# Detect if running in GitHub Actions
+IS_GITHUB_ACTIONS = os.getenv('GITHUB_ACTIONS', 'false').lower() == 'true'
 
 # Database Configuration
-DB_HOST = 'localhost'
+DB_HOST = '127.0.0.1' if IS_GITHUB_ACTIONS else 'localhost'  # GitHub Actions uses 127.0.0.1
 DB_USER = 'root'
 DB_PASSWORD = ''  # XAMPP default: empty password
 DB_NAME = 'damncrud'  # Match with damncrud.sql
 
 # Application Configuration
-BASE_URL = 'http://localhost/DamnCRUD'
+APP_HOST = '127.0.0.1' if IS_GITHUB_ACTIONS else 'localhost'
+BASE_URL = f'http://{APP_HOST}/DamnCRUD'
 ADMIN_USERNAME = 'admin'
 ADMIN_PASSWORD = 'nimda666!'
 
 # Selenium Configuration
 IMPLICIT_WAIT = 10
-HEADLESS = False  # Set to True untuk run headless
+HEADLESS = IS_GITHUB_ACTIONS  # Automatically enable headless mode in GitHub Actions
+
+print(f"[Pytest Config] Running in GitHub Actions: {IS_GITHUB_ACTIONS}")
+print(f"[Pytest Config] Database Host: {DB_HOST}")
+print(f"[Pytest Config] Base URL: {BASE_URL}")
+print(f"[Pytest Config] Headless Mode: {HEADLESS}")
 
 
 def get_db_connection():

@@ -17,13 +17,15 @@ jobs:
       mysql:
         image: mysql:8.0
         env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
           MYSQL_ROOT_PASSWORD: ''
           MYSQL_DATABASE: damncrud
-        options: >-
-          --health-cmd="mysqladmin ping"
+        options: >
+          --health-cmd="mysqladmin ping -u root"
           --health-interval=10s
           --health-timeout=5s
-          --health-retries=3
+          --health-retries=5
+          --network="bridge"
         ports:
           - 3306:3306
 
@@ -63,16 +65,25 @@ jobs:
         sudo systemctl start apache2
         sudo systemctl enable apache2
 
-    - name: Wait for Apache to start
-      run: sleep 5
+    - name: Wait for Apache and MySQL to start
+      run: |
+        sleep 10
+        # Wait for MySQL to be ready
+        for i in {1..30}; do
+          mysql -h 127.0.0.1 -u root --protocol=TCP -e "SELECT 1" damncrud && break
+          sleep 2
+        done
 
     - name: Setup MySQL Database
       run: |
-        mysql -h 127.0.0.1 -u root damncrud < db/damncrud.sql
+        # Check if damncrud database exists
+        mysql -h 127.0.0.1 -u root --protocol=TCP -e "SHOW DATABASES LIKE 'damncrud';" | grep damncrud || mysql -h 127.0.0.1 -u root --protocol=TCP -e "CREATE DATABASE damncrud;"
+        # Import schema
+        mysql -h 127.0.0.1 -u root --protocol=TCP damncrud < db/damncrud.sql
 
     - name: Verify Database
       run: |
-        mysql -h 127.0.0.1 -u root damncrud -e "SHOW TABLES;"
+        mysql -h 127.0.0.1 -u root --protocol=TCP damncrud -e "SHOW TABLES;" && echo "Database verified successfully"
 
     - name: Install Python dependencies
       run: |
@@ -88,20 +99,39 @@ jobs:
       run: |
         curl -s http://localhost/DamnCRUD/login.php | grep -q "Damn, sign in" && echo "Application is running" || exit 1
 
+    - name: Update PHP Database Configuration
+      run: |
+        # Update functions.php for GitHub Actions environment
+        sudo sed -i "s/localhost/127.0.0.1/g" /var/www/html/DamnCRUD/functions.php
+        sudo cat /var/www/html/DamnCRUD/functions.php | grep -A 5 "DATABASE"
+
+    - name: Verify Application is Running
+      run: |
+        curl -s http://localhost/DamnCRUD/login.php | grep -q "Damn" && echo "Application is accessible" || (echo "Application failed to load" && exit 1)
+
     - name: Create test reports directory
-      run: mkdir -p tests/reports
+      run: mkdir -p /var/www/html/DamnCRUD/tests/reports
 
     - name: Run Pytest with Parallel Execution (xdist)
       run: |
         cd /var/www/html/DamnCRUD
-        pytest tests/ -v --tb=short -n auto --html=tests/reports/report.html --self-contained-html --junitxml=tests/reports/junit.xml
+        python -m pytest tests/ -v --tb=short -n auto --html=tests/reports/report.html --self-contained-html --junitxml=tests/reports/junit.xml 2>&1 | tee pytest_output.log
       continue-on-error: true
       timeout-minutes: 15
+
+    - name: Copy test reports to workspace
+      if: always()
+      run: |
+        mkdir -p tests/reports
+        cp -r /var/www/html/DamnCRUD/tests/reports/* tests/reports/ 2>/dev/null || true
+        ls -la tests/reports/ || echo "No reports directory"
 
     - name: Display Test Results
       if: always()
       run: |
-        if [ -f /var/www/html/DamnCRUD/tests/reports/junit.xml ]; then
+        if [ -f tests/reports/junit.xml ]; then
+          cat tests/reports/junit.xml
+        elif [ -f /var/www/html/DamnCRUD/tests/reports/junit.xml ]; then
           cat /var/www/html/DamnCRUD/tests/reports/junit.xml
         fi
 
@@ -110,24 +140,27 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: pytest-html-report
-        path: /var/www/html/DamnCRUD/tests/reports/report.html
+        path: tests/reports/report.html
         retention-days: 30
+        if-no-files-found: ignore
 
     - name: Upload Test Report (JUnit XML)
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: pytest-junit-report
-        path: /var/www/html/DamnCRUD/tests/reports/junit.xml
+        path: tests/reports/junit.xml
         retention-days: 30
+        if-no-files-found: ignore
 
     - name: Publish Test Results
       if: always()
       uses: EnricoMi/publish-unit-test-result-action@v2
       with:
         files: |
-          /var/www/html/DamnCRUD/tests/reports/junit.xml
+          tests/reports/junit.xml
         check_name: Pytest Results
+      continue-on-error: true
 
     - name: Test Summary
       if: always()
@@ -136,8 +169,14 @@ jobs:
         echo "Pipeline: Completed"
         echo "Test Framework: Pytest with xdist"
         echo "Parallel Execution: Enabled (auto-detected CPU cores)"
-        if [ -f /var/www/html/DamnCRUD/tests/reports/junit.xml ]; then
-          echo "Report generated: tests/reports/report.html"
+        echo ""
+        if [ -f tests/reports/junit.xml ]; then
+          echo "Report Status: Generated successfully"
+          echo "Reports location: tests/reports/"
+        elif [ -f /var/www/html/DamnCRUD/tests/reports/junit.xml ]; then
+          echo "Report Status: Generated at /var/www/html/DamnCRUD/tests/reports/"
+        else
+          echo "Report Status: Not found (tests may have failed)"
         fi
 
   # Job untuk code quality
