@@ -57,22 +57,32 @@ def browser():
     Fixture untuk initialize dan teardown Chrome WebDriver
     """
     chrome_options = Options()
+
     if HEADLESS:
-        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless=new")
+
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    
-    # Initialize WebDriver
-    driver = webdriver.Chrome(options=chrome_options)
-    driver.implicitly_wait(IMPLICIT_WAIT)
-    driver.maximize_window()
-    
-    yield driver
-    
-    # Cleanup
-    driver.quit()
 
+    # ===== FIX UNTUK GITHUB ACTIONS =====
+    if IS_GITHUB_ACTIONS:
+        chrome_options.binary_location = "/usr/bin/chromium-browser"
+        service = Service("/usr/bin/chromedriver")
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+    else:
+        # Lokal (XAMPP / Windows)
+        driver = webdriver.Chrome(options=chrome_options)
+
+    driver.implicitly_wait(IMPLICIT_WAIT)
+
+    # maximize_window tidak diperlukan di headless
+    if not HEADLESS:
+        driver.maximize_window()
+
+    yield driver
+
+    driver.quit()
 
 @pytest.fixture(scope="function")
 def db_connection():
