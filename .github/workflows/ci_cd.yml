@@ -107,7 +107,7 @@ jobs:
 
     - name: Upload Test Report (HTML)
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: pytest-html-report
         path: /var/www/html/DamnCRUD/tests/reports/report.html
@@ -115,7 +115,7 @@ jobs:
 
     - name: Upload Test Report (JUnit XML)
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: pytest-junit-report
         path: /var/www/html/DamnCRUD/tests/reports/junit.xml
