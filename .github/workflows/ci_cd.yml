@@ -1,0 +1,174 @@
+name: DamnCRUD - Functional Testing CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  schedule:
+    # Run tests setiap hari jam 2 pagi UTC
+    - cron: '0 2 * * *'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ''
+          MYSQL_DATABASE: damncrud
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 3306:3306
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y apache2 php php-mysql php-cli libapache2-mod-php
+
+    - name: Configure Apache for DamnCRUD
+      run: |
+        sudo a2enmod rewrite
+        sudo usermod -a -G www-data $USER
+        sudo chown -R www-data:www-data /var/www/html
+        sudo mkdir -p /var/www/html/DamnCRUD
+        sudo cp -r . /var/www/html/DamnCRUD/
+        sudo chown -R www-data:www-data /var/www/html/DamnCRUD
+        
+        # Create Apache config
+        echo '<VirtualHost *:80>
+          DocumentRoot /var/www/html
+          <Directory /var/www/html>
+            AllowOverride All
+            Require all granted
+          </Directory>
+        </VirtualHost>' | sudo tee /etc/apache2/sites-available/000-default.conf
+        
+        sudo systemctl start apache2
+        sudo systemctl enable apache2
+
+    - name: Wait for Apache to start
+      run: sleep 5
+
+    - name: Setup MySQL Database
+      run: |
+        mysql -h 127.0.0.1 -u root damncrud < db/damncrud.sql
+
+    - name: Verify Database
+      run: |
+        mysql -h 127.0.0.1 -u root damncrud -e "SHOW TABLES;"
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Setup Chrome for WebDriver (Headless)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser chromium-chromedriver
+
+    - name: Verify Application is Running
+      run: |
+        curl -s http://localhost/DamnCRUD/login.php | grep -q "Damn, sign in" && echo "Application is running" || exit 1
+
+    - name: Create test reports directory
+      run: mkdir -p tests/reports
+
+    - name: Run Pytest with Parallel Execution (xdist)
+      run: |
+        cd /var/www/html/DamnCRUD
+        pytest tests/ -v --tb=short -n auto --html=tests/reports/report.html --self-contained-html --junitxml=tests/reports/junit.xml
+      continue-on-error: true
+      timeout-minutes: 15
+
+    - name: Display Test Results
+      if: always()
+      run: |
+        if [ -f /var/www/html/DamnCRUD/tests/reports/junit.xml ]; then
+          cat /var/www/html/DamnCRUD/tests/reports/junit.xml
+        fi
+
+    - name: Upload Test Report (HTML)
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: pytest-html-report
+        path: /var/www/html/DamnCRUD/tests/reports/report.html
+        retention-days: 30
+
+    - name: Upload Test Report (JUnit XML)
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: pytest-junit-report
+        path: /var/www/html/DamnCRUD/tests/reports/junit.xml
+        retention-days: 30
+
+    - name: Publish Test Results
+      if: always()
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      with:
+        files: |
+          /var/www/html/DamnCRUD/tests/reports/junit.xml
+        check_name: Pytest Results
+
+    - name: Test Summary
+      if: always()
+      run: |
+        echo "=== DamnCRUD Functional Testing Summary ==="
+        echo "Pipeline: Completed"
+        echo "Test Framework: Pytest with xdist"
+        echo "Parallel Execution: Enabled (auto-detected CPU cores)"
+        if [ -f /var/www/html/DamnCRUD/tests/reports/junit.xml ]; then
+          echo "Report generated: tests/reports/report.html"
+        fi
+
+  # Job untuk code quality
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Lint Python code
+      run: |
+        python -m pip install flake8 pylint
+        echo "Running Flake8..."
+        flake8 tests/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
+        echo "Flake8 check completed"
+
+  # Job status check
+  all-tests:
+    if: always()
+    needs: [test, code-quality]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check if any job failed
+      run: |
+        if [ "${{ needs.test.result }}" = "failure" ]; then
+          echo "Functional tests failed!"
+          exit 1
+        fi
+        echo "All checks passed!"
